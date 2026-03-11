@@ -2,7 +2,7 @@ from django.shortcuts import render
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-
+from django.core.cache import cache
 
 from .models import PatientRecord, PatientsAccessLog
 from .serializers import PatientSerializer
@@ -51,30 +51,48 @@ class PatientDataInsert(APIView):
             {"message": "Patient ingested successfully"}, status=status.HTTP_201_CREATED
         )
 
+import time
 
 class PatientRetrieveView(APIView):
 
     def get(self, request, patient_id):
-        try:
-            patient = PatientRecord.objects.get(patient_id=patient_id)
-        except PatientRecord.DoesNotExist:
-            return Response(
-                {"error": "Patient not found"}, status=status.HTTP_404_NOT_FOUND
-            )
+        start_time = time.time()
 
-        user = request.user if request.user.is_authenticated else None
-        PatientsAccessLog.objects.create(
-            patient=patient,
-            accessed_by=user,
-            ip_address=request.META.get("REMOTE_ADDR"),
-        )
+        cache_key = f"{patient_id}"
 
-        return Response(
-            {
+        cache_data = cache.get(cache_key)
+
+        if cache_data:
+            print("*** data in")
+            patientInfo = cache_data
+            duration = (time.time() - start_time) * 1000
+            print(f"*** Cache HIT: {duration:.2f}ms")
+
+        else:
+            try:
+                patient = PatientRecord.objects.get(patient_id=patient_id)
+
+            except PatientRecord.DoesNotExist:
+                return Response(
+                    {"error": "Patient not found"}, status=status.HTTP_404_NOT_FOUND
+                )
+
+            # user = request.user if request.user.is_authenticated else None
+            # PatientsAccessLog.objects.create(
+            #     patient=patient,
+            #     accessed_by=user,
+            #     ip_address=request.META.get("REMOTE_ADDR"),
+            # )
+            patientInfo = {
                 "patient_id": patient.patient_id,
                 "name": patient.full_name,
                 "gender": patient.gender,
                 "birth_date": patient.birth_date,
                 "ssn": patient.masked_ssn(),
             }
-        )
+            cache.set(cache_key, patientInfo, timeout=900)
+            
+            duration = (time.time() - start_time) * 1000
+            print(f"*** DATABASE HIT: {duration:.2f}ms")
+
+        return Response(patientInfo)
